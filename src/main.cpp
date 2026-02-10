@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -24,6 +25,26 @@ struct SwapchainSupportDetails {
     std::vector<VkSurfaceFormatKHR> formats;
     std::vector<VkPresentModeKHR> presentModes;
 };
+
+struct Vertex2D {
+    glm::vec2 pos;
+    glm::vec3 color;
+};
+
+struct PushConstants {
+    glm::mat4 mvp;
+    glm::vec4 color;
+};
+
+std::vector<char> readFile(const std::string& filename) {
+    std::ifstream file(filename, std::ios::ate | std::ios::binary);
+    if (!file.is_open()) throw std::runtime_error("Failed to open file: " + filename);
+    size_t fileSize = static_cast<size_t>(file.tellg());
+    std::vector<char> buffer(fileSize);
+    file.seekg(0);
+    file.read(buffer.data(), fileSize);
+    return buffer;
+}
 
 // ========================================================================================
 // Application
@@ -61,6 +82,10 @@ private:
     VkRenderPass renderPass = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> swapchainFramebuffers;
 
+    // Pipeline
+    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+    VkPipeline landerPipeline = VK_NULL_HANDLE;    
+
     // ------------------------------------------------------------------------------------
     // Main Loop Functions
     // ------------------------------------------------------------------------------------
@@ -81,6 +106,8 @@ private:
         createImageViews();
         createRenderPass();
         createFramebuffers();
+        createPipelineLayout();
+        createPipelines();
     }
 
     void mainLoop() {
@@ -322,6 +349,24 @@ private:
                 throw std::runtime_error("Failed to create framebuffer");
         }
     }
+    void createPipelineLayout() {
+        VkPushConstantRange pushConstantRange{};
+        pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        pushConstantRange.offset = 0;
+        pushConstantRange.size = sizeof(PushConstants);
+
+        VkPipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges = &pushConstantRange;
+
+        if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS)
+            throw std::runtime_error("Failed to create pipeline layout");    
+    }
+
+    void createPipelines() {
+
+    }
 
     // ------------------------------------------------------------------------------------
     // pickPhysicalDevice helper functions
@@ -419,7 +464,12 @@ private:
         extent.width = std::clamp(extent.width, caps.minImageExtent.width, caps.maxImageExtent.width);
         extent.height = std::clamp(extent.height, caps.minImageExtent.height, caps.maxImageExtent.height);
         return extent;
-    } 
+    }
+
+    // ------------------------------------------------------------------------------------
+    // pipeline helper functions
+    // ------------------------------------------------------------------------------------
+
 
 };
 
