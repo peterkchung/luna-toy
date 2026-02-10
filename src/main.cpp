@@ -10,12 +10,13 @@
 constexpr int WINDOW_WIDTH = 1280;
 constexpr int WINDOW_HEIGHT = 720;
 
-struct QueueFamilyIndices { std::optional<glm::uint32_t> graphicsFamily;
+struct QueueFamilyIndices {
+    std::optional<glm::uint32_t> graphicsFamily;
     std::optional<glm::uint32_t> presentFamily;
     bool isComplete() const { return graphicsFamily.has_value() && presentFamily.has_value(); }
 };
 
-struct SwapChainSupportDetails {
+struct SwapchainSupportDetails {
     VkSurfaceCapabilitiesKHR capabilities;
     std::vector<VkSurfaceFormatKHR> formats;
     std::vector<VkPresentModeKHR> presentModes;
@@ -169,8 +170,8 @@ private:
         return indices;
     }
 
-    SwapChainSupportDetails querySwapchainSupport(VkPhysicalDevice dev) {
-        SwapChainSupportDetails details;
+    SwapchainSupportDetails querySwapchainSupport(VkPhysicalDevice dev) {
+        SwapchainSupportDetails details;
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev, surface, &details.capabilities);
 
         uint32_t formatCount;
