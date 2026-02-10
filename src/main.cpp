@@ -485,8 +485,71 @@ private:
             vkCreateSemaphore(device, &semInfo, nullptr, &renderFinishedSemaphores[i]);
             vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]);
         }
+    }:w
+
+
+    void createLanderGeometry() {
+        float s = 0.5f;
+        std::vector<Vertex2D> verts;
+
+        glm::vec3 gold{0.85f, 0.75f, 0.3f};
+        glm::vec3 silver{0.7f, 0.72f, 0.75f};
+        glm::vec3 dark{0.3f, 0.3f, 0.35f};
+        glm::vec3 red{0.9f, 0.2f, 0.1f};
+
+        // Lambda: push 3 vertices scaled by s
+        auto addTri = [&](glm::vec2 a, glm::vec2 b, glm::vec2 c, glm::vec3 col) {
+            verts.push_back({a * s, col});
+            verts.push_back({b * s, col});
+            verts.push_back({c * s, col});
+        };
+
+        // Main body — hexagonal fan from first point
+        glm::vec2 bodyPts[] = {
+            {-0.6f, 0.0f}, {-0.5f, 0.4f}, {-0.2f, 0.6f},
+            {0.2f, 0.6f}, {0.5f, 0.4f}, {0.6f, 0.0f},
+            {0.5f, -0.3f}, {-0.5f, -0.3f}
+        };
+        for (int i = 1; i < 7; i++) {
+            addTri(bodyPts[0], bodyPts[i], bodyPts[i + 1], gold);
+        }
+
+        // Ascent stage (top silver box)
+        glm::vec2 topPts[] = {
+            {-0.3f, 0.6f}, {-0.25f, 1.0f}, {0.25f, 1.0f}, {0.3f, 0.6f}
+        };
+        addTri(topPts[0], topPts[1], topPts[2], silver);
+        addTri(topPts[0], topPts[2], topPts[3], silver);
+
+        // Window
+        addTri({-0.12f * s, 0.75f * s}, {0.0f, 0.9f * s}, {0.12f * s, 0.75f * s}, dark);
+
+        // Left leg + foot
+        addTri({-0.5f, -0.3f}, {-0.9f, -1.0f}, {-0.7f, -1.0f}, dark);
+        addTri({-0.9f, -1.0f}, {-1.1f, -1.05f}, {-0.7f, -1.05f}, dark);
+
+        // Right leg + foot
+        addTri({0.5f, -0.3f}, {0.7f, -1.0f}, {0.9f, -1.0f}, dark);
+        addTri({0.7f, -1.05f}, {0.9f, -1.0f}, {1.1f, -1.05f}, dark);
+
+        // Nozzle
+        addTri({-0.15f, -0.3f}, {-0.2f, -0.5f}, {0.2f, -0.5f}, dark);
+        addTri({-0.15f, -0.3f}, {0.2f, -0.5f}, {0.15f, -0.3f}, dark);
+
+        // Red marking stripe
+        addTri({-0.4f, 0.15f}, {-0.4f, 0.25f}, {0.4f, 0.25f}, red);
+        addTri({-0.4f, 0.15f}, {0.4f, 0.25f}, {0.4f, 0.15f}, red);
+
+        landerVertexCount = static_cast<uint32_t>(verts.size());
+        VkDeviceSize bufSize = sizeof(Vertex2D) * verts.size();
+        createBuffer(bufSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     landerVertexBuffer, landerVertexMemory);
+        uploadBuffer(landerVertexBuffer, landerVertexMemory, verts.data(), bufSize);
     }
 
+    // TEST FUNCTION
+    /*
     void createTriangleBuffer() {
         // Three vertices in clip space [-1, 1] with RGB colors
         std::vector<Vertex2D> verts = {
@@ -504,6 +567,7 @@ private:
                      triangleVertexBuffer, triangleVertexMemory);
         uploadBuffer(triangleVertexBuffer, triangleVertexMemory, verts.data(), bufSize);
     }
+    */
 
     // ------------------------------------------------------------------------------------
     // drawFrame function
