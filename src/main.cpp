@@ -139,7 +139,14 @@ private:
     void mainLoop() {
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
+
+            if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+                glfwSetWindowShouldClose(window, GLFW_TRUE);
+
+            drawFrame();
         }
+        // wait for gpu before cleanup
+        vkDeviceWaitIdle(device);
     }
 
     void cleanUp() {
@@ -477,6 +484,64 @@ private:
     // drawFrame function
     // ------------------------------------------------------------------------------------
 
+    void drawFrame() {
+        vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+
+        uint32_t imageIndex;
+        VkResult result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX,
+            imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            recreateSwapchain();
+            return;
+        } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+            throw std::runtime_error("Failed to acquire swapchain image");
+        }
+
+        vkResetFences(device, 1, &inFlightFences[currentFrame]);
+
+        vkResetCommandBuffer(commandBuffers[currentFrame], 0);
+        recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
+
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+        VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame]};
+        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        submitInfo.waitSemaphoreCount = 1;
+        submitInfo.pWaitSemaphores = waitSemaphores;
+        submitInfo.pWaitDstStageMask = waitStages;
+
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
+
+        VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = signalSemaphores;
+
+        if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS)
+            throw std::runtime_error("Failed to submit draw command buffer");
+
+        VkPresentInfoKHR presentInfo{};
+        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        presentInfo.waitSemaphoreCount = 1;
+        presentInfo.pWaitSemaphores = signalSemaphores;
+
+        VkSwapchainKHR swapchains[] = {swapchain};
+        presentInfo.swapchainCount = 1;
+        presentInfo.pSwapchains = swapchains;
+        presentInfo.pImageIndices = &imageIndex;
+
+        result = vkQueuePresentKHR(presentQueue, &presentInfo);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+            framebufferResized = false;
+            recreateSwapchain();
+        } else if (result != VK_SUCCESS) {
+            throw std::runtime_error("Failed to present swapchain image");
+        }
+
+        currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
 
     // ------------------------------------------------------------------------------------
     // pickPhysicalDevice helper functions
@@ -760,7 +825,93 @@ private:
             vkFreeMemory(device, memory, nullptr);
             memory = VK_NULL_HANDLE;
         }
-    }  
+    }
+
+    // ------------------------------------------------------------------------------------
+    // drawFrame helper functions 
+    // ------------------------------------------------------------------------------------
+
+    void recreateSwapchain() {
+        // Wait for minimized window
+        int w = 0, h = 0;
+        glfwGetFramebufferSize(window, &w, &h);
+        while (w == 0 || h == 0) {
+            glfwGetFramebufferSize(window, &w, &h);
+            glfwWaitEvents();
+        }
+
+        vkDeviceWaitIdle(device);
+        cleanupSwapchain();
+
+        // Pipelines depend on swapchain extent, so rebuild them too
+        vkDestroyPipeline(device, landerPipeline, nullptr);
+
+        createSwapchain();
+        createImageViews();
+        createPipelines();
+        createFramebuffers();
+    }    
+
+    void cleanupSwapchain() {
+        for (auto fb : swapchainFramebuffers) vkDestroyFramebuffer(device, fb, nullptr);
+        for (auto iv : swapchainImageViews) vkDestroyImageView(device, iv, nullptr);
+        vkDestroySwapchainKHR(device, swapchain, nullptr);
+    }
+
+    void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        vkBeginCommandBuffer(cmd, &beginInfo);
+
+        // Begin the render pass — clears the screen
+        VkRenderPassBeginInfo rpBegin{};
+        rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rpBegin.renderPass = renderPass;
+        rpBegin.framebuffer = swapchainFramebuffers[imageIndex];
+        rpBegin.renderArea.offset = {0, 0};
+        rpBegin.renderArea.extent = swapchainExtent;
+
+        VkClearValue clearColor = {{{0.01f, 0.01f, 0.03f, 1.0f}}}; // deep space
+        rpBegin.clearValueCount = 1;
+        rpBegin.pClearValues = &clearColor;
+
+        vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+        // Set dynamic viewport and scissor
+        VkViewport viewport{};
+        viewport.width = static_cast<float>(swapchainExtent.width);
+        viewport.height = static_cast<float>(swapchainExtent.height);
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.extent = swapchainExtent;
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        // Bind the pipeline
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, landerPipeline);
+
+        // Bind the vertex buffer
+        VkBuffer buffers[] = {triangleVertexBuffer};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
+
+        // Push constants: identity MVP (clip space coords) + white tint
+        PushConstants pc{};
+        pc.mvp = glm::mat4(1.0f);  // identity — vertices are already in clip space
+        pc.color = glm::vec4(1.0f); // no tint
+        vkCmdPushConstants(cmd, pipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(pc), &pc);
+
+        // DRAW! 3 vertices, 1 instance
+        vkCmdDraw(cmd, triangleVertexCount, 1, 0, 0);
+
+        vkCmdEndRenderPass(cmd);
+
+        if (vkEndCommandBuffer(cmd) != VK_SUCCESS)
+            throw std::runtime_error("Failed to record command buffer");
+    }
 };
 
 int main() {
