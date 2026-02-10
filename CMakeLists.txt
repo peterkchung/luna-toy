@@ -15,3 +15,34 @@ target_link_libraries(luna PRIVATE
     glfw
     glm::glm
 )
+
+find_program(GLSLC glslc HINTS $ENV{VULKAN_SDK}/bin /usr/bin)
+if(NOT GLSLC)
+    message(FATAL_ERROR "glslc not found! Install glslang-tools.")
+endif()
+
+set(SHADER_DIR ${CMAKE_SOURCE_DIR}/shaders)
+set(SPIRV_DIR ${CMAKE_BINARY_DIR}/shaders)
+file(MAKE_DIRECTORY ${SPIRV_DIR})
+
+set(SHADERS
+    ${SHADER_DIR}/shader.vert
+    ${SHADER_DIR}/shader.frag
+)
+
+foreach(SHADER ${SHADERS})
+    get_filename_component(SHADER_NAME ${SHADER} NAME)
+    set(SPIRV_FILE ${SPIRV_DIR}/${SHADER_NAME}.spv)
+    add_custom_command(
+        OUTPUT ${SPIRV_FILE}
+        COMMAND ${GLSLC} ${SHADER} -o ${SPIRV_FILE}
+        DEPENDS ${SHADER}
+        COMMENT "Compiling ${SHADER_NAME}"
+    )
+    list(APPEND SPIRV_FILES ${SPIRV_FILE})
+endforeach()
+
+add_custom_target(shaders ALL DEPENDS ${SPIRV_FILES})
+add_dependencies(luna shaders)
+
+target_compile_definitions(luna PRIVATE SHADER_DIR="${SPIRV_DIR}")
