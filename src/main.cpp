@@ -3,8 +3,11 @@
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -20,6 +23,9 @@
 constexpr int WINDOW_WIDTH = 1280;
 constexpr int WINDOW_HEIGHT = 720;
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+
+constexpr float WORLD_WIDTH = 40.0f;
+constexpr float WORLD_HEIGHT = 22.5f;
 
 struct QueueFamilyIndices {
     std::optional<glm::uint32_t> graphicsFamily;
@@ -52,6 +58,21 @@ std::vector<char> readFile(const std::string& filename) {
     file.read(buffer.data(), fileSize);
     return buffer;
 }
+
+enum class SimState {
+    Flying,
+    Landed,
+    Crashed
+};
+
+struct Lander {
+    glm::vec2 pos{WORLD_WIDTH / 2.0f, WORLD_HEIGHT / 2.0f};  // center of world
+    glm::vec2 vel{0.0f, 0.0f};
+    float angle = 0.0f;       // radians, 0 = upright
+    float fuel = 100.0f;
+    bool thrusting = false;
+    SimState state = SimState::Flying;
+};
 
 // ========================================================================================
 // Application
@@ -102,11 +123,17 @@ private:
     std::vector<VkFence> inFlightFences;
     uint32_t currentFrame = 0;
     
-    VkBuffer triangleVertexBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory triangleVertexMemory = VK_NULL_HANDLE;
+    // VkBuffer triangleVertexBuffer = VK_NULL_HANDLE;
+    // VkDeviceMemory triangleVertexMemory = VK_NULL_HANDLE;
     uint32_t triangleVertexCount = 0;
 
     bool framebufferResized = false;
+
+    VkBuffer landerVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory landerVertexMemory = VK_NULL_HANDLE;
+    uint32_t landerVertexCount = 0;
+
+    Lander lander;  
 
     // ------------------------------------------------------------------------------------
     // Main Loop Functions
@@ -137,16 +164,24 @@ private:
         createCommandPool();
         createCommandBuffers();
         createSyncObjects();
-        createTriangleBuffer();
+        createLanderGeometry();
     }
 
     void mainLoop() {
+        auto lastTime = std::chrono::high_resolution_clock::now();
+        
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
+
+            auto now = std::chrono::high_resolution_clock::now();
+            float dt = std::chrono::duration<float>(now-lastTime).count();
+            lastTime = now;
+            dt = std::min(dt, 0.05f);
 
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
 
+            handleInput(dt);
             drawFrame();
         }
         // wait for gpu before cleanup
@@ -154,7 +189,7 @@ private:
     }
 
     void cleanup() {
-        destroyBuffer(triangleVertexBuffer, triangleVertexMemory);
+        destroyBuffer(landerVertexBuffer, landerVertexMemory);
 
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
@@ -485,8 +520,7 @@ private:
             vkCreateSemaphore(device, &semInfo, nullptr, &renderFinishedSemaphores[i]);
             vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]);
         }
-    }:w
-
+    }
 
     void createLanderGeometry() {
         float s = 0.5f;
@@ -569,6 +603,31 @@ private:
     }
     */
 
+    // ------------------------------------------------------------------------------------
+    // handleInput function
+    // ------------------------------------------------------------------------------------
+
+    void handleInput(float dt) {
+        float moveSpeed = 8.0f;     // world units per second
+        float rotateSpeed = 2.5f;   // radians per second
+
+        if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS ||
+            glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+            lander.angle -= rotateSpeed * dt;
+
+        if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS ||
+            glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+            lander.angle += rotateSpeed * dt;
+
+        if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS ||
+            glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+            lander.pos.y += moveSpeed * dt;
+
+        if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS ||
+            glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+            lander.pos.y -= moveSpeed * dt;
+    }
+    
     // ------------------------------------------------------------------------------------
     // drawFrame function
     // ------------------------------------------------------------------------------------
@@ -952,7 +1011,6 @@ private:
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         vkBeginCommandBuffer(cmd, &beginInfo);
 
-        // Begin the render pass — clears the screen
         VkRenderPassBeginInfo rpBegin{};
         rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rpBegin.renderPass = renderPass;
@@ -960,13 +1018,12 @@ private:
         rpBegin.renderArea.offset = {0, 0};
         rpBegin.renderArea.extent = swapchainExtent;
 
-        VkClearValue clearColor = {{{0.01f, 0.01f, 0.03f, 1.0f}}}; // deep space
+        VkClearValue clearColor = {{{0.01f, 0.01f, 0.03f, 1.0f}}};
         rpBegin.clearValueCount = 1;
         rpBegin.pClearValues = &clearColor;
 
         vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 
-        // Set dynamic viewport and scissor
         VkViewport viewport{};
         viewport.width = static_cast<float>(swapchainExtent.width);
         viewport.height = static_cast<float>(swapchainExtent.height);
@@ -977,24 +1034,40 @@ private:
         scissor.extent = swapchainExtent;
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        // Bind the pipeline
+        // Orthographic projection: maps world coordinates to clip space
+        // Shows the entire WORLD_WIDTH x WORLD_HEIGHT area
+        float aspect = static_cast<float>(swapchainExtent.width) /
+                        static_cast<float>(swapchainExtent.height);
+        float halfW = WORLD_WIDTH / 2.0f;
+        float halfH = halfW / aspect;
+
+        glm::mat4 proj = glm::ortho(
+            0.0f, WORLD_WIDTH,    // left, right
+            0.0f, halfH * 2.0f,  // bottom, top
+            -1.0f, 1.0f          // near, far
+        );
+
+        // Model matrix: position the lander in world space
+        //   1. Translate to lander.pos
+        //   2. Rotate around Z by -angle (negative because Y-up, CCW positive)
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(lander.pos, 0.0f));
+        model = glm::rotate(model, -lander.angle, glm::vec3(0.0f, 0.0f, 1.0f));
+
+        // Bind pipeline and draw
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, landerPipeline);
 
-        // Bind the vertex buffer
-        VkBuffer buffers[] = {triangleVertexBuffer};
+        VkBuffer buffers[] = {landerVertexBuffer};
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
 
-        // Push constants: identity MVP (clip space coords) + white tint
         PushConstants pc{};
-        pc.mvp = glm::mat4(1.0f);  // identity — vertices are already in clip space
-        pc.color = glm::vec4(1.0f); // no tint
+        pc.mvp = proj * model;
+        pc.color = glm::vec4(1.0f);
         vkCmdPushConstants(cmd, pipelineLayout,
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(pc), &pc);
 
-        // DRAW! 3 vertices, 1 instance
-        vkCmdDraw(cmd, triangleVertexCount, 1, 0, 0);
+        vkCmdDraw(cmd, landerVertexCount, 1, 0, 0);
 
         vkCmdEndRenderPass(cmd);
 
