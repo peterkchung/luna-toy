@@ -64,7 +64,7 @@ public:
         initWindow();
         initVulkan();
         mainLoop();
-        cleanUp();
+        cleanup();
     }
 
 private:
@@ -117,6 +117,10 @@ private:
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
         window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Luna", nullptr, nullptr);
+
+        // resize callback to trigger swapchain recreation
+        glfwSetWindowUserPointer(window, this);
+        glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
     }
 
     void initVulkan() {
@@ -171,6 +175,15 @@ private:
 
         glfwDestroyWindow(window);
         glfwTerminate();
+    }
+
+    // ------------------------------------------------------------------------------------
+    // initWindow functions
+    // ------------------------------------------------------------------------------------
+
+    static void framebufferResizeCallback(GLFWwindow* w, int, int) {
+        auto app = reinterpret_cast<LunaApp*>(glfwGetWindowUserPointer(w));
+        app->framebufferResized = true;
     }
 
     // ------------------------------------------------------------------------------------
