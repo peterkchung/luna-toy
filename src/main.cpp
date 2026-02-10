@@ -3,9 +3,11 @@
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
+
+#include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <vector>
-#include <optional>
 
 constexpr int WINDOW_WIDTH = 1280;
 constexpr int WINDOW_HEIGHT = 720;
@@ -120,6 +122,13 @@ private:
                 break;
             }
         }
+
+        if (physicalDevice == VK_NULL_HANDLE)
+            throw std::runtime_error("No suitable GPU found");
+
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(physicalDevice, &props);
+        std::cout << "GPU: " << props.deviceName << std::endl;
     }
 
     void createLogicalDevice() {
