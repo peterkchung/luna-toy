@@ -57,6 +57,10 @@ private:
     VkExtent2D swapchainExtent;
     std::vector<VkImageView> swapchainImageViews;
 
+    // Render and Frames
+    VkRenderPass renderPass = VK_NULL_HANDLE;
+    std::vector<VkFramebuffer> swapchainFramebuffers;
+
     // ------------------------------------------------------------------------------------
     // Main Loop Functions
     // ------------------------------------------------------------------------------------
@@ -75,6 +79,8 @@ private:
         createLogicalDevice();
         createSwapchain();
         createImageViews();
+        createRenderPass();
+        createFramebuffers();
     }
 
     void mainLoop() {
@@ -94,7 +100,7 @@ private:
     }
 
     // ------------------------------------------------------------------------------------
-    // Vulkan Init
+    // initVulkan functions
     // ------------------------------------------------------------------------------------
  
     void createInstance(){
@@ -254,6 +260,64 @@ private:
             viewInfo.subresourceRange.layerCount = 1;
             if (vkCreateImageView(device, &viewInfo, nullptr, &swapchainImageViews[i]) != VK_SUCCESS)
                 throw std::runtime_error("Failed to create image view");
+        }
+    }
+
+    void createRenderPass() {
+        VkAttachmentDescription colorAttachment{};
+        colorAttachment.format = swapchainImageFormat;
+        colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;    // clear screen at start
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;   // keep the results
+        colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; // ready to display
+
+        VkAttachmentReference colorRef{};
+        colorRef.attachment = 0;
+        colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorRef;
+
+        VkSubpassDependency dependency{};
+        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependency.dstSubpass = 0;
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.srcAccessMask = 0;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        VkRenderPassCreateInfo rpInfo{};
+        rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rpInfo.attachmentCount = 1;
+        rpInfo.pAttachments = &colorAttachment;
+        rpInfo.subpassCount = 1;
+        rpInfo.pSubpasses = &subpass;
+        rpInfo.dependencyCount = 1;
+        rpInfo.pDependencies = &dependency;
+
+        if (vkCreateRenderPass(device, &rpInfo, nullptr, &renderPass) != VK_SUCCESS)
+            throw std::runtime_error("Failed to create render pass");
+    }
+
+    void createFramebuffers() {
+        swapchainFramebuffers.resize(swapchainImageViews.size());
+        for (size_t i = 0; i < swapchainImageViews.size(); i++) {
+            VkImageView attachments[] = {swapchainImageViews[i]};
+            VkFramebufferCreateInfo fbInfo{};
+            fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            fbInfo.renderPass = renderPass;
+            fbInfo.attachmentCount = 1;
+            fbInfo.pAttachments = attachments;
+            fbInfo.width = swapchainExtent.width;
+            fbInfo.height = swapchainExtent.height;
+            fbInfo.layers = 1;
+            if (vkCreateFramebuffer(device, &fbInfo, nullptr, &swapchainFramebuffers[i]) != VK_SUCCESS)
+                throw std::runtime_error("Failed to create framebuffer");
         }
     }
 
