@@ -45,6 +45,9 @@ private:
     VkInstance instance = VK_NULL_HANDLE;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+    VkDevice device = VK_NULL_HANDLE;
+    VkQueue graphicsQueue = VK_NULL_HANDLE;
+    VkQueue presentQueue = VK_NULL_HANDLE;
 
     // ------------------------------------------------------------------------------------
     // Main Loop Functions
@@ -132,7 +135,46 @@ private:
     }
 
     void createLogicalDevice() {
-    }
+        auto indices = findQueueFamilies(physicalDevice);
+        float priority = 1.0f;
+
+        std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+        std::vector<uint32_t> uniqueFamilies;
+        uniqueFamilies.push_back(indices.graphicsFamily.value());
+        if (indices.presentFamily.value() != indices.graphicsFamily.value())
+            uniqueFamilies.push_back(indices.presentFamily.value());
+
+        for (uint32_t family : uniqueFamilies) {
+            VkDeviceQueueCreateInfo queueInfo{};
+            queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            queueInfo.queueFamilyIndex = family;
+            queueInfo.queueCount = 1;
+            queueInfo.pQueuePriorities = &priority;
+            queueCreateInfos.push_back(queueInfo);
+        }
+
+        VkPhysicalDeviceFeatures deviceFeatures{};
+        // Enable large points if GPU supports it (needed later for particles)
+        VkPhysicalDeviceFeatures supported;
+        vkGetPhysicalDeviceFeatures(physicalDevice, &supported);
+        if (supported.largePoints) deviceFeatures.largePoints = VK_TRUE;
+
+        const char* extensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
+        VkDeviceCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
+        createInfo.pQueueCreateInfos = queueCreateInfos.data();
+        createInfo.pEnabledFeatures = &deviceFeatures;
+        createInfo.enabledExtensionCount = 1;
+        createInfo.ppEnabledExtensionNames = extensions;
+
+        if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) != VK_SUCCESS)
+            throw std::runtime_error("Failed to create logical device");
+
+        vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
+        vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
+    };
 
     // pickPhysicalDevice helper functions
 
