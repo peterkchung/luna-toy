@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <optional>
@@ -100,6 +101,12 @@ private:
     std::vector<VkSemaphore> renderFinishedSemaphores;
     std::vector<VkFence> inFlightFences;
     uint32_t currentFrame = 0;
+    
+    VkBuffer triangleVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory triangleVertexMemory = VK_NULL_HANDLE;
+    uint32_t triangleVertexCount = 0;
+
+    bool framebufferResized = false;
 
     // ------------------------------------------------------------------------------------
     // Main Loop Functions
@@ -126,7 +133,7 @@ private:
         createCommandPool();
         createCommandBuffers();
         createSyncObjects();
-        createTriangleBuffers();
+        createTriangleBuffer();
     }
 
     void mainLoop() {
@@ -448,7 +455,22 @@ private:
         }
     }
 
-    void createTriangleBuffers() {
+    void createTriangleBuffer() {
+        // Three vertices in clip space [-1, 1] with RGB colors
+        std::vector<Vertex2D> verts = {
+            {{ 0.0f,  0.5f}, {1.0f, 0.0f, 0.0f}},  // top, red
+            {{-0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},  // bottom-left, green
+            {{ 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}},  // bottom-right, blue
+        };
+
+        triangleVertexCount = static_cast<uint32_t>(verts.size());
+        VkDeviceSize bufSize = sizeof(Vertex2D) * verts.size();
+
+        // HOST_VISIBLE = CPU can write to it. COHERENT = no manual flush needed.
+        createBuffer(bufSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     triangleVertexBuffer, triangleVertexMemory);
+        uploadBuffer(triangleVertexBuffer, triangleVertexMemory, verts.data(), bufSize);
     }
 
     // ------------------------------------------------------------------------------------
@@ -681,10 +703,64 @@ private:
     }
 
     // ------------------------------------------------------------------------------------
-    // commands and syncronization helper functions 
+    // buffer helper functions 
     // ------------------------------------------------------------------------------------
-    
-    
+
+    void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
+                      VkMemoryPropertyFlags properties,
+                      VkBuffer& buffer, VkDeviceMemory& memory) {
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size = size;
+        bufferInfo.usage = usage;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS)
+            throw std::runtime_error("Failed to create buffer");
+
+        VkMemoryRequirements memReqs;
+        vkGetBufferMemoryRequirements(device, buffer, &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, properties);
+
+        if (vkAllocateMemory(device, &allocInfo, nullptr, &memory) != VK_SUCCESS)
+            throw std::runtime_error("Failed to allocate buffer memory");
+
+        vkBindBufferMemory(device, buffer, memory, 0);
+    }
+
+    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+        VkPhysicalDeviceMemoryProperties memProps;
+        vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProps);
+        for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+            if ((typeFilter & (1 << i)) &&
+                (memProps.memoryTypes[i].propertyFlags & properties) == properties)
+                return i;
+        }
+        throw std::runtime_error("Failed to find suitable memory type");
+    }
+
+    void uploadBuffer(VkBuffer /*buffer*/, VkDeviceMemory memory,
+                      const void* data, VkDeviceSize size) {
+        void* mapped;
+        vkMapMemory(device, memory, 0, size, 0, &mapped);
+        memcpy(mapped, data, static_cast<size_t>(size));
+        vkUnmapMemory(device, memory);
+    }
+
+    void destroyBuffer(VkBuffer& buffer, VkDeviceMemory& memory) {
+        if (buffer != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device, buffer, nullptr);
+            buffer = VK_NULL_HANDLE;
+        }
+        if (memory != VK_NULL_HANDLE) {
+            vkFreeMemory(device, memory, nullptr);
+            memory = VK_NULL_HANDLE;
+        }
+    }  
 };
 
 int main() {
