@@ -21,6 +21,10 @@ struct SwapChainSupportDetails {
     std::vector<VkPresentModeKHR> presentModes;
 };
 
+// ========================================================================================
+// Application
+// ========================================================================================
+
 class LunaApp {
 
 public:
@@ -39,9 +43,9 @@ private:
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 
-    // ------------------
+    // ------------------------------------------------------------------------------------
     // Main Loop Functions
-    // ------------------
+    // ------------------------------------------------------------------------------------
 
     void initWindow() {
         glfwInit();
@@ -67,10 +71,10 @@ private:
         glfwTerminate();
     }
 
-    // ------------------
+    // ------------------------------------------------------------------------------------
     // Vulkan Init
-    // ------------------
-
+    // ------------------------------------------------------------------------------------
+ 
     void createInstance(){
         VkApplicationInfo appInfo{};
         appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
