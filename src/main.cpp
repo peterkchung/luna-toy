@@ -7,8 +7,10 @@
 #include <vector>
 #include <optional>
 
-struct QueueFamilyIndices {
-    std::optional<glm::uint32_t> graphicsFamily;
+constexpr int WINDOW_WIDTH = 1280;
+constexpr int WINDOW_HEIGHT = 720;
+
+struct QueueFamilyIndices { std::optional<glm::uint32_t> graphicsFamily;
     std::optional<glm::uint32_t> presentFamily;
     bool isComplete() const { return graphicsFamily.has_value() && presentFamily.has_value(); }
 };
@@ -44,7 +46,7 @@ private:
     void initWindow() {
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        window = glfwCreateWindow(1280, 720, "Luna", nullptr, nullptr);
+        window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Luna", nullptr, nullptr);
     }
 
     void initVulkan() {
@@ -139,7 +141,7 @@ private:
         if (!swapChainSupported) return false;
 
         auto swapChainSupport = querySwapchainSupport(dev);
-        return !swapChainSupport.formats.empty() && !swapChainSuport.presentModes.empty();
+        return !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
     }
 
     QueueFamilyIndices findQueueFamilies(VkPhysicalDevice dev) {
