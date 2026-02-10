@@ -32,4 +32,4 @@ luna/
 
 ## License
 
-Apache 2.0
+Apache 2.0. Please refer to [LICENSE](LICENSE) for details.
