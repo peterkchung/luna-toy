@@ -90,6 +90,8 @@ private:
     }
 
     void cleanUp() {
+        for (auto fb : swapchainFramebuffers) vkDestroyFramebuffer(device, fb, nullptr);
+        vkDestroyRenderPass(device, renderPass, nullptr);
         for (auto iv : swapchainImageViews) vkDestroyImageView(device, iv, nullptr);
         vkDestroySwapchainKHR(device, swapchain, nullptr);
         vkDestroyDevice(device, nullptr);
