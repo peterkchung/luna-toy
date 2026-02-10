@@ -248,8 +248,12 @@ private:
 };
 
 int main() {
-    LunaApp app;
-    app.run();
-    return 0;
-
+    try {
+        LunaApp app;
+        app.run();
+    } catch (const std::exception& e) {
+        std::cerr << "Fatal error: " << e.what() << std::endl;
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
 }
