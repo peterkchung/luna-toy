@@ -96,6 +96,11 @@ private:
     VkCommandPool commandPool = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> commandBuffers;
 
+    std::vector<VkSemaphore> imageAvailableSemaphores;
+    std::vector<VkSemaphore> renderFinishedSemaphores;
+    std::vector<VkFence> inFlightFences;
+    uint32_t currentFrame = 0;
+
     // ------------------------------------------------------------------------------------
     // Main Loop Functions
     // ------------------------------------------------------------------------------------
@@ -424,13 +429,30 @@ private:
     }
 
     void createSyncObjects() {
+        imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+        renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+        inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+
+        VkSemaphoreCreateInfo semInfo{};
+        semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        // Start signaled so the first frame doesn't deadlock waiting
+        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            vkCreateSemaphore(device, &semInfo, nullptr, &imageAvailableSemaphores[i]);
+            vkCreateSemaphore(device, &semInfo, nullptr, &renderFinishedSemaphores[i]);
+            vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]);
+        }
     }
 
     void createTriangleBuffers() {
     }
 
     // ------------------------------------------------------------------------------------
-    // drawFrame functions
+    // drawFrame function
     // ------------------------------------------------------------------------------------
 
 
