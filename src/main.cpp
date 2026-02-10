@@ -1,8 +1,10 @@
 // Lunar Simulation Repo by @peterkchung
 
-#include <GLFW/glfw3.h>
 #include <vulkan/vulkan.h>
+#include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
 #include <stdexcept>
+
 class LunaApp {
 
 
@@ -19,6 +21,11 @@ private:
     
     // Vulkan Core
     VkInstance instance = VK_NULL_HANDLE;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+
+    // ------------------
+    // Main Loop Functions
+    // ------------------
 
     void initWindow() {
         glfwInit();
@@ -72,7 +79,9 @@ private:
     }
 
     void createSurface() {
-
+        if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create window surface");
+        }
     }
 
     void pickPhysicalDevice() {
