@@ -149,14 +149,26 @@ private:
         vkDeviceWaitIdle(device);
     }
 
-    void cleanUp() {
-        for (auto fb : swapchainFramebuffers) vkDestroyFramebuffer(device, fb, nullptr);
+    void cleanup() {
+        destroyBuffer(triangleVertexBuffer, triangleVertexMemory);
+
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
+            vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+            vkDestroyFence(device, inFlightFences[i], nullptr);
+        }
+
+        vkDestroyCommandPool(device, commandPool, nullptr);
+        cleanupSwapchain();
+
+        vkDestroyPipeline(device, landerPipeline, nullptr);
+        vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyRenderPass(device, renderPass, nullptr);
-        for (auto iv : swapchainImageViews) vkDestroyImageView(device, iv, nullptr);
-        vkDestroySwapchainKHR(device, swapchain, nullptr);
+
         vkDestroyDevice(device, nullptr);
         vkDestroySurfaceKHR(instance, surface, nullptr);
         vkDestroyInstance(instance, nullptr);
+
         glfwDestroyWindow(window);
         glfwTerminate();
     }
