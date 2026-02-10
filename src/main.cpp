@@ -1,4 +1,4 @@
-// Lunar Simulation Repo by @peterkchung
+// Luna - Lunar Simulation by @peterkchung
 
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
@@ -11,8 +11,14 @@
 #include <stdexcept>
 #include <vector>
 
+
+// ========================================================================================
+// Constants, Structs, Helpers
+// ========================================================================================
+
 constexpr int WINDOW_WIDTH = 1280;
 constexpr int WINDOW_HEIGHT = 720;
+constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 struct QueueFamilyIndices {
     std::optional<glm::uint32_t> graphicsFamily;
@@ -86,6 +92,10 @@ private:
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline landerPipeline = VK_NULL_HANDLE;    
 
+    // Command pool, sync, and buffers
+    VkCommandPool commandPool = VK_NULL_HANDLE;
+    std::vector<VkCommandBuffer> commandBuffers;
+
     // ------------------------------------------------------------------------------------
     // Main Loop Functions
     // ------------------------------------------------------------------------------------
@@ -108,6 +118,10 @@ private:
         createFramebuffers();
         createPipelineLayout();
         createPipelines();
+        createCommandPool();
+        createCommandBuffers();
+        createSyncObjects();
+        createTriangleBuffers();
     }
 
     void mainLoop() {
@@ -363,6 +377,7 @@ private:
         if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS)
             throw std::runtime_error("Failed to create pipeline layout");    
     }
+
     void createPipelines() {
         std::string shaderDir = SHADER_DIR;
 
@@ -380,6 +395,44 @@ private:
             {binding}, attrs, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
         );
     }
+
+    void createCommandPool() {
+        auto indices = findQueueFamilies(physicalDevice);
+
+        VkCommandPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        // RESET_COMMAND_BUFFER_BIT lets us re-record each frame
+        poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        poolInfo.queueFamilyIndex = indices.graphicsFamily.value();
+
+        if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS)
+            throw std::runtime_error("Failed to create command pool");
+    }
+
+    void createCommandBuffers() {
+        // One command buffer per frame-in-flight
+        commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.commandPool = commandPool;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
+
+        if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS)
+            throw std::runtime_error("Failed to allocate command buffers");
+    }
+
+    void createSyncObjects() {
+    }
+
+    void createTriangleBuffers() {
+    }
+
+    // ------------------------------------------------------------------------------------
+    // drawFrame functions
+    // ------------------------------------------------------------------------------------
+
 
     // ------------------------------------------------------------------------------------
     // pickPhysicalDevice helper functions
@@ -605,6 +658,11 @@ private:
         return pipeline;
     }
 
+    // ------------------------------------------------------------------------------------
+    // commands and syncronization helper functions 
+    // ------------------------------------------------------------------------------------
+    
+    
 };
 
 int main() {
