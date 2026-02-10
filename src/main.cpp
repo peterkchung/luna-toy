@@ -2,10 +2,9 @@
 
 #include <GLFW/glfw3.h>
 #include <vulkan/vulkan.h>
-
+#include <stdexcept>
 class LunaApp {
 
-VkInstance instance = VK_NULL_HANDLE;
 
 public:
     void run() {
@@ -17,6 +16,9 @@ public:
 
 private:
     GLFWwindow* window = nullptr;
+    
+    // Vulkan Core
+    VkInstance instance = VK_NULL_HANDLE;
 
     void initWindow() {
         glfwInit();
@@ -42,8 +44,10 @@ private:
         glfwTerminate();
     }
 
-    // initVulkan Instance functions
-    
+    // ------------------
+    // Vulkan Init
+    // ------------------
+
     void createInstance(){
         VkApplicationInfo appInfo{};
         appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -51,6 +55,20 @@ private:
         appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
         appInfo.pEngineName = "No Engine";
         appInfo.apiVersion = VK_API_VERSION_1_0;
+
+        uint32_t glfwExtCount = 0;
+        const char** glfwExts = glfwGetRequiredInstanceExtensions(&glfwExtCount);
+
+        VkInstanceCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        createInfo.pApplicationInfo = &appInfo;
+        createInfo.enabledExtensionCount = glfwExtCount;
+        createInfo.ppEnabledExtensionNames = glfwExts;
+        createInfo.enabledLayerCount = 0;
+
+        if (vkCreateInstance(&createInfo, nullptr, &instance) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create Vulkan instance");
+        }
     }
 
     void createSurface() {
