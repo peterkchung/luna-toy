@@ -166,6 +166,7 @@ private:
     Lander lander;  
     std::vector<glm::vec2> terrainPoints;
     float landingPadX = 0.0f;
+    std::vector<StarVertex> stars;
     std::mt19937 rng{42};
 
     // ------------------------------------------------------------------------------------
@@ -202,8 +203,10 @@ private:
 
     void initSim() {
         generateTerrain();
+        generateStars();
         createLanderGeometry();
         createTerrainGeometry();
+        createStarsGeometry();
         createLandingPadGeometry();
         resetLander();
     }
@@ -343,13 +346,11 @@ private:
         }
 
         VkPhysicalDeviceFeatures deviceFeatures{};
-        // Enable large points if GPU supports it (needed later for particles)
         VkPhysicalDeviceFeatures supported;
         vkGetPhysicalDeviceFeatures(physicalDevice, &supported);
         if (supported.largePoints) deviceFeatures.largePoints = VK_TRUE;
 
         const char* extensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-
         VkDeviceCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
@@ -357,10 +358,8 @@ private:
         createInfo.pEnabledFeatures = &deviceFeatures;
         createInfo.enabledExtensionCount = 1;
         createInfo.ppEnabledExtensionNames = extensions;
-
         if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) != VK_SUCCESS)
             throw std::runtime_error("Failed to create logical device");
-
         vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
         vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
     };
@@ -536,6 +535,23 @@ private:
                 {binding}, attrs, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP
             );
         }
+
+        {
+            VkVertexInputBindingDescription binding{};
+            binding.binding = 0;
+            binding.stride = sizeof(StarVertex);
+            binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+            std::vector<VkVertexInputAttributeDescription> attrs(3);
+            attrs[0] = {0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(StarVertex, pos)};
+            attrs[1] = {1, 0, VK_FORMAT_R32_SFLOAT, offsetof(StarVertex, brightness)};
+            attrs[2] = {2, 0, VK_FORMAT_R32_SFLOAT, offsetof(StarVertex, size)};
+
+            starsPipeline = createPipeline(
+                shaderDir + "/stars.vert.spv", shaderDir + "/stars.frag.spv",
+                {binding}, attrs, VK_PRIMITIVE_TOPOLOGY_POINT_LIST, true  // blending ON
+            );
+        }
     }
 
     void createCommandPool() {
@@ -582,7 +598,32 @@ private:
         }
     }
 
-     void generateTerrain() {
+    void generateStars() {
+        stars.clear();
+        std::uniform_real_distribution<float> xDist(0.0f, WORLD_WIDTH);
+        std::uniform_real_distribution<float> yDist(5.0f, WORLD_HEIGHT);
+        std::uniform_real_distribution<float> brightDist(0.2f, 1.0f);
+        std::uniform_real_distribution<float> sizeDist(1.0f, 3.0f);
+
+        for (int i = 0; i < 300; i++) {
+            stars.push_back({
+                {xDist(rng), yDist(rng)},
+                brightDist(rng),
+                sizeDist(rng)
+            });
+        }
+    }
+
+    void createStarsGeometry() {
+        starsVertexCount = static_cast<uint32_t>(stars.size());
+        VkDeviceSize bufSize = sizeof(StarVertex) * stars.size();
+        createBuffer(bufSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     starsVertexBuffer, starsVertexMemory);
+        uploadBuffer(starsVertexBuffer, starsVertexMemory, stars.data(), bufSize);
+    }
+
+    void generateTerrain() {
         terrainPoints.clear();
         std::uniform_real_distribution<float> padPosDist(8.0f, WORLD_WIDTH - 8.0f);
 
@@ -1270,8 +1311,23 @@ private:
         glm::mat4 proj = glm::ortho(0.0f, WORLD_WIDTH, halfH * 2.0f, 0.0f, -1.0f, 1.0f);
 
         PushConstants pc{};
+        
+        // --- Stars (background layer) ---
+        if (starsVertexCount > 0) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, starsPipeline);
+            VkBuffer buffers[] = {starsVertexBuffer};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
 
-        // --- 1. Terrain (back layer) ---
+            pc.mvp = proj;
+            pc.color = glm::vec4(1.0f);  // full brightness multiplier
+            vkCmdPushConstants(cmd, pipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(pc), &pc);
+            vkCmdDraw(cmd, starsVertexCount, 1, 0, 0);
+        }
+
+        // --- Terrain (back layer) ---
         if (terrainVertexCount > 0) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, terrainPipeline);
             VkBuffer buffers[] = {terrainVertexBuffer};
