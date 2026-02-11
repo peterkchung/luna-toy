@@ -68,6 +68,12 @@ struct TerrainVertex {
     glm::vec2 pos;
 };
 
+struct StarVertex {
+    glm::vec2 pos;
+    float brightness;
+    float size;
+};
+
 enum class SimState {
     Flying,
     Landed,
@@ -135,6 +141,7 @@ private:
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline landerPipeline = VK_NULL_HANDLE;    
     VkPipeline terrainPipeline = VK_NULL_HANDLE;
+    VkPipeline starsPipeline = VK_NULL_HANDLE;
 
     // Command pool, sync, and buffers
     VkCommandPool commandPool = VK_NULL_HANDLE;
@@ -162,7 +169,11 @@ private:
     VkBuffer terrainVertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory terrainVertexMemory = VK_NULL_HANDLE;
     uint32_t terrainVertexCount = 0;   
-
+    
+    VkBuffer starsVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory starsVertexMemory = VK_NULL_HANDLE;
+    uint32_t starsVertexCount = 0;
+    
     Lander lander;  
     std::vector<glm::vec2> terrainPoints;
     float landingPadX = 0.0f;
