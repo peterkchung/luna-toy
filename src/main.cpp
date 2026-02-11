@@ -31,6 +31,15 @@ constexpr float GROUND_HEIGHT = 2.0f;
 constexpr float LANDING_PAD_X = 20.0f;
 constexpr float LANDING_PAD_WIDTH = 3.0f;
 
+// Physics Sim Constants
+constexpr float LUNAR_GRAVITY = 1.62f;       // m/s² — Moon's actual surface gravity
+constexpr float THRUST_POWER = 4.0f;         // m/s² — acceleration when thrusting
+constexpr float ROTATION_SPEED = 2.5f;       // rad/s
+constexpr float INITIAL_FUEL = 100.0f;       // units
+constexpr float FUEL_BURN_RATE = 8.0f;       // units/s
+constexpr float SAFE_LANDING_VEL = 2.0f;     // m/s — max speed for safe landing
+constexpr float SAFE_LANDING_ANGLE = 0.26f;  // ~15 degrees in radians
+
 struct QueueFamilyIndices {
     std::optional<glm::uint32_t> graphicsFamily;
     std::optional<glm::uint32_t> presentFamily;
@@ -196,8 +205,11 @@ private:
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
 
-            // TODO comment out handleInput and update for physics
+            if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
+                resetLander();
+
             // handleInput(dt);
+            updatePhysics(dt);
             drawFrame();
         }
         // wait for gpu before cleanup
@@ -206,7 +218,7 @@ private:
 
     void cleanup() {
         destroyBuffer(landerVertexBuffer, landerVertexMemory);
-        // TODO destroy lander
+        destroyBuffer(landingPadVertexBuffer, landingPadVertexMemory);
          
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
@@ -687,7 +699,85 @@ private:
     // updatePhysics function
     // ------------------------------------------------------------------------------------
 
-    
+    void updatePhysics(float dt) {
+        if (lander.state != SimState::Flying) return;
+
+        // --- Input ---
+        bool thrustInput = glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS ||
+                           glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS;
+        bool leftInput = glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS ||
+                         glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS;
+        bool rightInput = glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS ||
+                          glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS;
+
+        // --- Rotation ---
+        if (leftInput) lander.angle -= ROTATION_SPEED * dt;
+        if (rightInput) lander.angle += ROTATION_SPEED * dt;
+
+        // --- Gravity (always active) ---
+        lander.vel.y -= LUNAR_GRAVITY * dt;
+
+        // --- Thrust (only when pressing up AND fuel remains) ---
+        lander.thrusting = thrustInput && lander.fuel > 0.0f;
+        if (lander.thrusting) {
+            // Decompose thrust into x/y components based on facing direction
+            float thrustX = -std::sin(lander.angle) * THRUST_POWER;
+            float thrustY =  std::cos(lander.angle) * THRUST_POWER;
+            lander.vel.x += thrustX * dt;
+            lander.vel.y += thrustY * dt;
+
+            // Burn fuel
+            lander.fuel -= FUEL_BURN_RATE * dt;
+            lander.fuel = std::max(lander.fuel, 0.0f);
+        }
+
+        // --- Position update (Euler integration) ---
+        lander.pos += lander.vel * dt;
+
+        // --- Horizontal wrapping (world is a cylinder) ---
+        if (lander.pos.x < 0) lander.pos.x += WORLD_WIDTH;
+        if (lander.pos.x > WORLD_WIDTH) lander.pos.x -= WORLD_WIDTH;
+
+        // --- Ground collision (flat ground at GROUND_HEIGHT for now) ---
+        float landerBottom = lander.pos.y - 0.5f;  // feet offset from center
+
+        if (landerBottom <= GROUND_HEIGHT) {
+            // Snap to ground
+            lander.pos.y = GROUND_HEIGHT + 0.5f;
+
+            float speed = glm::length(lander.vel);
+
+            // Normalize angle to [0, 2π] then measure deviation from upright
+            float absAngle = std::abs(std::fmod(lander.angle, glm::two_pi<float>()));
+            if (absAngle > glm::pi<float>()) absAngle = glm::two_pi<float>() - absAngle;
+
+            // Check if within landing pad bounds
+            float padLeft = LANDING_PAD_X - LANDING_PAD_WIDTH / 2.0f;
+            float padRight = LANDING_PAD_X + LANDING_PAD_WIDTH / 2.0f;
+            bool onPad = lander.pos.x >= padLeft && lander.pos.x <= padRight;
+
+            // Evaluate landing
+            if (speed < SAFE_LANDING_VEL && absAngle < SAFE_LANDING_ANGLE && onPad) {
+                lander.state = SimState::Landed;
+                lander.vel = {0.0f, 0.0f};
+                std::cout << "*** SUCCESSFUL LANDING! ***" << std::endl;
+                std::cout << "    Speed: " << speed << " m/s  |  Angle: "
+                          << glm::degrees(absAngle) << " deg  |  Fuel: "
+                          << lander.fuel << std::endl;
+            } else {
+                lander.state = SimState::Crashed;
+                lander.vel = {0.0f, 0.0f};
+                if (!onPad)
+                    std::cout << "CRASH — Missed the landing pad!" << std::endl;
+                else if (speed >= SAFE_LANDING_VEL)
+                    std::cout << "CRASH — Too fast! (" << speed << " m/s)" << std::endl;
+                else
+                    std::cout << "CRASH — Bad angle! (" << glm::degrees(absAngle) << " deg)" << std::endl;
+                std::cout << "    Press R to retry." << std::endl;
+            }
+        }
+    }
+
     // ------------------------------------------------------------------------------------
     // drawFrame function
     // ------------------------------------------------------------------------------------
@@ -1103,36 +1193,54 @@ private:
 
         glm::mat4 proj = glm::ortho(
             0.0f, WORLD_WIDTH,    // left, right
-            0.0f, halfH * 2.0f,  // bottom, top
+            halfH * 2.0f, 0.0f,  // bottom, top
             -1.0f, 1.0f          // near, far
         );
 
-        // Model matrix: position the lander in world space
-        //   1. Translate to lander.pos
-        //   2. Rotate around Z by -angle (negative because Y-up, CCW positive)
-        glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(lander.pos, 0.0f));
-        model = glm::rotate(model, -lander.angle, glm::vec3(0.0f, 0.0f, 1.0f));
-
-        // Bind pipeline and draw
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, landerPipeline);
 
-        VkBuffer buffers[] = {landerVertexBuffer};
-        VkDeviceSize offsets[] = {0};
-        vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
+        // --- Draw landing pad (identity model matrix — already in world space) ---
+        {
+            VkBuffer buffers[] = {landingPadVertexBuffer};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
 
-        PushConstants pc{};
-        pc.mvp = proj * model;
-        pc.color = glm::vec4(1.0f);
-        vkCmdPushConstants(cmd, pipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(pc), &pc);
+            PushConstants pc{};
+            pc.mvp = proj;  // no model transform needed
+            pc.color = glm::vec4(1.0f);
+            vkCmdPushConstants(cmd, pipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(pc), &pc);
 
-        vkCmdDraw(cmd, landerVertexCount, 1, 0, 0);
+            vkCmdDraw(cmd, landingPadVertexCount, 1, 0, 0);
+        }
 
-        vkCmdEndRenderPass(cmd);
+        // --- Draw lander (model matrix = translate + rotate) ---
+        {
+            VkBuffer buffers[] = {landerVertexBuffer};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
 
-        if (vkEndCommandBuffer(cmd) != VK_SUCCESS)
-            throw std::runtime_error("Failed to record command buffer");
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(lander.pos, 0.0f));
+            model = glm::rotate(model, -lander.angle, glm::vec3(0.0f, 0.0f, 1.0f));
+
+            PushConstants pc{};
+            pc.mvp = proj * model;
+
+            // Visual feedback: tint red on crash, green on landed
+            if (lander.state == SimState::Crashed)
+                pc.color = glm::vec4(1.0f, 0.3f, 0.3f, 1.0f);
+            else if (lander.state == SimState::Landed)
+                pc.color = glm::vec4(0.3f, 1.0f, 0.3f, 1.0f);
+            else
+                pc.color = glm::vec4(1.0f);
+
+            vkCmdPushConstants(cmd, pipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(pc), &pc);
+
+            vkCmdDraw(cmd, landerVertexCount, 1, 0, 0);
+        }
     }
 };
 
