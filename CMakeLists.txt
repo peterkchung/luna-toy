@@ -28,6 +28,8 @@ file(MAKE_DIRECTORY ${SPIRV_DIR})
 set(SHADERS
     ${SHADER_DIR}/shader.vert
     ${SHADER_DIR}/shader.frag
+    ${SHADER_DIR}/terrain.vert
+    ${SHADER_DIR}/terrain.frag
 )
 
 foreach(SHADER ${SHADERS})
