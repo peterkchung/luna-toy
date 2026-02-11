@@ -32,6 +32,8 @@ set(SHADERS
     ${SHADER_DIR}/terrain.frag
     ${SHADER_DIR}/stars.vert
     ${SHADER_DIR}/stars.frag
+    ${SHADER_DIR}/particles.vert
+    ${SHADER_DIR}/particles.frag
 )
 
 foreach(SHADER ${SHADERS})
