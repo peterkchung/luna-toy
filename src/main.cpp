@@ -33,6 +33,10 @@ constexpr float LANDING_PAD_X = 20.0f;
 constexpr float LANDING_PAD_WIDTH = 3.0f;
 constexpr int TERRAIN_SEGMENTS = 200;
 
+constexpr int MAX_PARTICLES = 500;
+constexpr float PARTICLE_LIFETIME = 0.8f;
+constexpr float PARTICLE_SPAWN_RATE = 200.0f;
+// 
 // Physics Sim Constants
 constexpr float LUNAR_GRAVITY = 1.62f;       // m/s² — Moon's actual surface gravity
 constexpr float THRUST_POWER = 4.0f;         // m/s² — acceleration when thrusting
@@ -72,6 +76,21 @@ struct StarVertex {
     glm::vec2 pos;
     float brightness;
     float size;
+};
+
+struct ParticleVertex {
+    glm::vec2 pos;
+    float life;
+    float size;
+};
+
+struct Particle {
+    glm::vec2 pos;
+    glm::vec2 vel;
+    float life;
+    float maxLife;
+    float size;
+    bool active = false;
 };
 
 enum class SimState {
@@ -142,6 +161,7 @@ private:
     VkPipeline landerPipeline = VK_NULL_HANDLE;    
     VkPipeline terrainPipeline = VK_NULL_HANDLE;
     VkPipeline starsPipeline = VK_NULL_HANDLE;
+    VkPipeline particlePipeline = VK_NULL_HANDLE;
 
     // Command pool, sync, and buffers
     VkCommandPool commandPool = VK_NULL_HANDLE;
@@ -173,11 +193,16 @@ private:
     VkBuffer starsVertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory starsVertexMemory = VK_NULL_HANDLE;
     uint32_t starsVertexCount = 0;
-    
+
+    VkBuffer particleVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory particleVertexMemory = VK_NULL_HANDLE;
+
     Lander lander;  
     std::vector<glm::vec2> terrainPoints;
     float landingPadX = 0.0f;
     std::vector<StarVertex> stars;
+    std::vector<Particle> particles;
+    float particleAccumulator = 0.0f;
     std::mt19937 rng{42};
 
     // ------------------------------------------------------------------------------------
@@ -219,6 +244,13 @@ private:
         createTerrainGeometry();
         createStarsGeometry();
         createLandingPadGeometry();
+
+        particles.resize(MAX_PARTICLES);
+        VkDeviceSize particleBufSize = sizeof(ParticleVertex) * MAX_PARTICLES;
+        createBuffer(particleBufSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     particleVertexBuffer, particleVertexMemory);
+
         resetLander();
     }
 
@@ -241,6 +273,7 @@ private:
 
             // handleInput(dt);
             updatePhysics(dt);
+            updateParticles(dt);
             drawFrame();
         }
         // wait for gpu before cleanup
@@ -250,7 +283,10 @@ private:
     void cleanup() {
         destroyBuffer(landerVertexBuffer, landerVertexMemory);
         destroyBuffer(landingPadVertexBuffer, landingPadVertexMemory);
-         
+        destroyBuffer(terrainVertexBuffer, terrainVertexMemory);
+        destroyBuffer(starsVertexBuffer, starsVertexMemory);
+        destroyBuffer(particleVertexBuffer, particleVertexMemory);
+
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
             vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
@@ -261,6 +297,9 @@ private:
         cleanupSwapchain();
 
         vkDestroyPipeline(device, landerPipeline, nullptr);
+        vkDestroyPipeline(device, terrainPipeline, nullptr);
+        vkDestroyPipeline(device, starsPipeline, nullptr);
+        vkDestroyPipeline(device, particlePipeline, nullptr);       
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyRenderPass(device, renderPass, nullptr);
 
@@ -563,6 +602,23 @@ private:
                 {binding}, attrs, VK_PRIMITIVE_TOPOLOGY_POINT_LIST, true  // blending ON
             );
         }
+        
+        {
+            VkVertexInputBindingDescription binding{};
+            binding.binding = 0;
+            binding.stride = sizeof(ParticleVertex);
+            binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+            std::vector<VkVertexInputAttributeDescription> attrs(3);
+            attrs[0] = {0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(ParticleVertex, pos)};
+            attrs[1] = {1, 0, VK_FORMAT_R32_SFLOAT, offsetof(ParticleVertex, life)};
+            attrs[2] = {2, 0, VK_FORMAT_R32_SFLOAT, offsetof(ParticleVertex, size)};
+
+            particlePipeline = createPipeline(
+                shaderDir + "/particles.vert.spv", shaderDir + "/particles.frag.spv",
+                {binding}, attrs, VK_PRIMITIVE_TOPOLOGY_POINT_LIST, true
+            );
+        }
     }
 
     void createCommandPool() {
@@ -779,6 +835,8 @@ private:
 
     void resetLander() {
         lander = Lander{};
+        particleAccumulator = 0.0f;
+        for (auto& p : particles) p.active = false;       
     }
 
     // TEST FUNCTION
@@ -908,6 +966,65 @@ private:
         t = std::clamp(t, 0.0f, 1.0f);
         return glm::mix(terrainPoints[idx].y, terrainPoints[idx + 1].y, t);
     }
+
+    // ------------------------------------------------------------------------------------
+    // updateParticles function
+    // ------------------------------------------------------------------------------------
+    
+    void updateParticles(float dt) {
+        std::uniform_real_distribution<float> angleDist(-0.4f, 0.4f);
+        std::uniform_real_distribution<float> speedDist(3.0f, 7.0f);
+        std::uniform_real_distribution<float> lifeDist(0.3f, PARTICLE_LIFETIME);
+        std::uniform_real_distribution<float> sizeDist(2.0f, 6.0f);
+
+        // Spawn new particles while thrusting
+        if (lander.thrusting && lander.state == SimState::Flying) {
+            particleAccumulator += PARTICLE_SPAWN_RATE * dt;
+            while (particleAccumulator >= 1.0f) {
+                particleAccumulator -= 1.0f;
+
+                // Find first inactive slot in the pool
+                for (auto& p : particles) {
+                    if (!p.active) {
+                        // Nozzle direction = lander angle + π (opposite of thrust)
+                        // Plus random spread for visual variety
+                        float nozzleAngle = lander.angle + glm::pi<float>() + angleDist(rng);
+                        float speed = speedDist(rng);
+
+                        // Spawn at nozzle position (0.25 units behind lander center)
+                        p.pos = lander.pos + glm::vec2(
+                            -std::sin(lander.angle) * (-0.25f),
+                             std::cos(lander.angle) * (-0.25f)
+                        );
+
+                        // Particle velocity = lander velocity + nozzle ejection
+                        p.vel = lander.vel + glm::vec2(
+                            -std::sin(nozzleAngle) * speed,
+                             std::cos(nozzleAngle) * speed
+                        );
+
+                        p.maxLife = lifeDist(rng);
+                        p.life = p.maxLife;
+                        p.size = sizeDist(rng);
+                        p.active = true;
+                        break;  // one particle per accumulator tick
+                    }
+                }
+            }
+        }
+
+        // Age and move existing particles
+        for (auto& p : particles) {
+            if (!p.active) continue;
+            p.life -= dt;
+            if (p.life <= 0.0f) {
+                p.active = false;
+                continue;
+            }
+            p.vel.y -= LUNAR_GRAVITY * 0.3f * dt;  // light gravity droop
+            p.pos += p.vel * dt;
+        }
+    }    
 
     // ------------------------------------------------------------------------------------
     // drawFrame function
@@ -1322,54 +1439,81 @@ private:
         glm::mat4 proj = glm::ortho(0.0f, WORLD_WIDTH, halfH * 2.0f, 0.0f, -1.0f, 1.0f);
 
         PushConstants pc{};
-        
-        // --- Stars (background layer) ---
+
+        // --- 1. Stars ---
         if (starsVertexCount > 0) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, starsPipeline);
             VkBuffer buffers[] = {starsVertexBuffer};
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
-
             pc.mvp = proj;
-            pc.color = glm::vec4(1.0f);  // full brightness multiplier
+            pc.color = glm::vec4(1.0f);
             vkCmdPushConstants(cmd, pipelineLayout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0, sizeof(pc), &pc);
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
             vkCmdDraw(cmd, starsVertexCount, 1, 0, 0);
         }
 
-        // --- Terrain (back layer) ---
+        // --- 2. Terrain ---
         if (terrainVertexCount > 0) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, terrainPipeline);
             VkBuffer buffers[] = {terrainVertexBuffer};
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
-
             pc.mvp = proj;
-            pc.color = glm::vec4(0.45f, 0.42f, 0.4f, 1.0f);  // moon gray base
+            pc.color = glm::vec4(0.45f, 0.42f, 0.4f, 1.0f);
             vkCmdPushConstants(cmd, pipelineLayout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0, sizeof(pc), &pc);
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
             vkCmdDraw(cmd, terrainVertexCount, 1, 0, 0);
         }
 
-        // --- 2. Landing pad (middle layer) ---
+        // --- 3. Landing pad ---
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, landerPipeline);
             VkBuffer buffers[] = {landingPadVertexBuffer};
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
-
             pc.mvp = proj;
             pc.color = glm::vec4(1.0f);
             vkCmdPushConstants(cmd, pipelineLayout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0, sizeof(pc), &pc);
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
             vkCmdDraw(cmd, landingPadVertexCount, 1, 0, 0);
         }
 
-        // --- 3. Lander (front layer) ---
+        // --- 4. Particles (NEW — dynamic upload each frame) ---
         {
+            // Collect only active particles into GPU format
+            std::vector<ParticleVertex> activeParticles;
+            for (const auto& p : particles) {
+                if (p.active) {
+                    activeParticles.push_back({
+                        p.pos,
+                        p.life / p.maxLife,  // normalize to 0-1 for shader
+                        p.size
+                    });
+                }
+            }
+
+            if (!activeParticles.empty()) {
+                // Upload active subset to pre-allocated buffer
+                uploadBuffer(particleVertexBuffer, particleVertexMemory,
+                    activeParticles.data(),
+                    sizeof(ParticleVertex) * activeParticles.size());
+
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, particlePipeline);
+                VkBuffer buffers[] = {particleVertexBuffer};
+                VkDeviceSize offsets[] = {0};
+                vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
+                pc.mvp = proj;
+                pc.color = glm::vec4(1.0f);
+                vkCmdPushConstants(cmd, pipelineLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+                vkCmdDraw(cmd, static_cast<uint32_t>(activeParticles.size()), 1, 0, 0);
+            }
+        }
+
+        // --- 5. Lander ---
+        {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, landerPipeline);
             VkBuffer buffers[] = {landerVertexBuffer};
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
@@ -1387,8 +1531,7 @@ private:
                 pc.color = glm::vec4(1.0f);
 
             vkCmdPushConstants(cmd, pipelineLayout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0, sizeof(pc), &pc);
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
             vkCmdDraw(cmd, landerVertexCount, 1, 0, 0);
         }
 
