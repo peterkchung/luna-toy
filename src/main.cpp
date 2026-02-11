@@ -14,6 +14,7 @@
 #include <optional>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 
@@ -108,6 +109,12 @@ struct Lander {
     SimState state = SimState::Flying;
 };
 
+struct HudRenderData {
+    std::vector<glm::vec2> vertices;
+    std::vector<std::pair<uint32_t, uint32_t>> bars;  // (firstVertex, vertexCount)
+    std::vector<glm::vec4> barColors;
+};
+
 std::vector<char> readFile(const std::string& filename) {
     std::ifstream file(filename, std::ios::ate | std::ios::binary);
     if (!file.is_open()) throw std::runtime_error("Failed to open file: " + filename);
@@ -162,7 +169,8 @@ private:
     VkPipeline terrainPipeline = VK_NULL_HANDLE;
     VkPipeline starsPipeline = VK_NULL_HANDLE;
     VkPipeline particlePipeline = VK_NULL_HANDLE;
-
+    VkPipeline hudPipeline = VK_NULL_HANDLE;
+    
     // Command pool, sync, and buffers
     VkCommandPool commandPool = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> commandBuffers;
@@ -196,6 +204,9 @@ private:
 
     VkBuffer particleVertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory particleVertexMemory = VK_NULL_HANDLE;
+
+    VkBuffer hudVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory hudVertexMemory = VK_NULL_HANDLE;
 
     Lander lander;  
     std::vector<glm::vec2> terrainPoints;
@@ -251,6 +262,11 @@ private:
                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                      particleVertexBuffer, particleVertexMemory);
 
+        VkDeviceSize hudBufSize = sizeof(glm::vec2) * 1024;
+        createBuffer(hudBufSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     hudVertexBuffer, hudVertexMemory);
+
         resetLander();
     }
 
@@ -286,6 +302,7 @@ private:
         destroyBuffer(terrainVertexBuffer, terrainVertexMemory);
         destroyBuffer(starsVertexBuffer, starsVertexMemory);
         destroyBuffer(particleVertexBuffer, particleVertexMemory);
+        destroyBuffer(hudVertexBuffer, hudVertexMemory);
 
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
@@ -300,6 +317,7 @@ private:
         vkDestroyPipeline(device, terrainPipeline, nullptr);
         vkDestroyPipeline(device, starsPipeline, nullptr);
         vkDestroyPipeline(device, particlePipeline, nullptr);       
+        vkDestroyPipeline(device, hudPipeline, nullptr);  
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyRenderPass(device, renderPass, nullptr);
 
@@ -617,6 +635,21 @@ private:
             particlePipeline = createPipeline(
                 shaderDir + "/particles.vert.spv", shaderDir + "/particles.frag.spv",
                 {binding}, attrs, VK_PRIMITIVE_TOPOLOGY_POINT_LIST, true
+            );
+        }
+
+        {
+            VkVertexInputBindingDescription binding{};
+            binding.binding = 0;
+            binding.stride = sizeof(glm::vec2);
+            binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+            std::vector<VkVertexInputAttributeDescription> attrs(1);
+            attrs[0] = {0, 0, VK_FORMAT_R32G32_SFLOAT, 0};
+
+            hudPipeline = createPipeline(
+                shaderDir + "/hud.vert.spv", shaderDir + "/hud.frag.spv",
+                {binding}, attrs, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, true
             );
         }
     }
@@ -1025,6 +1058,64 @@ private:
             p.pos += p.vel * dt;
         }
     }    
+    
+    // ------------------------------------------------------------------------------------
+    // buildHud function
+    // ------------------------------------------------------------------------------------
+
+    HudRenderData buildHud() {
+        HudRenderData hud;
+
+        float sw = static_cast<float>(swapchainExtent.width);
+        float sh = static_cast<float>(swapchainExtent.height);
+
+        // Helper: append a colored quad to the HUD batch
+        auto addBar = [&](float x, float y, float w, float h, glm::vec4 color) {
+            uint32_t offset = static_cast<uint32_t>(hud.vertices.size());
+            hud.vertices.push_back({x, y});
+            hud.vertices.push_back({x + w, y});
+            hud.vertices.push_back({x + w, y + h});
+            hud.vertices.push_back({x, y});
+            hud.vertices.push_back({x + w, y + h});
+            hud.vertices.push_back({x, y + h});
+            hud.bars.push_back({offset, 6});
+            hud.barColors.push_back(color);
+        };
+
+        float barX = 20.0f, barY = sh - 40.0f, barW = 200.0f, barH = 20.0f;
+
+        // Fuel bar
+        addBar(barX, barY, barW, barH, {0.2f, 0.2f, 0.2f, 0.7f});  // background
+        float fuelFrac = lander.fuel / INITIAL_FUEL;
+        glm::vec4 fuelColor = fuelFrac > 0.3f
+            ? glm::vec4(0.2f, 0.8f, 0.3f, 0.9f)   // green = plenty
+            : glm::vec4(0.9f, 0.2f, 0.1f, 0.9f);   // red = danger
+        addBar(barX, barY, barW * fuelFrac, barH, fuelColor);
+
+        // Velocity bar
+        float speed = glm::length(lander.vel);
+        float velFrac = std::min(speed / 10.0f, 1.0f);
+        glm::vec4 velColor = speed < SAFE_LANDING_VEL
+            ? glm::vec4(0.2f, 0.8f, 0.3f, 0.9f)    // green = safe
+            : glm::vec4(0.9f, 0.4f, 0.1f, 0.9f);    // orange = too fast
+        addBar(barX, barY - 30.0f, barW, barH, {0.2f, 0.2f, 0.2f, 0.7f});
+        addBar(barX, barY - 30.0f, barW * velFrac, barH, velColor);
+
+        // Altitude bar
+        float altitude = lander.pos.y - getTerrainHeight(lander.pos.x);
+        float altFrac = std::min(altitude / 20.0f, 1.0f);
+        addBar(barX, barY - 60.0f, barW, barH, {0.2f, 0.2f, 0.2f, 0.7f});
+        addBar(barX, barY - 60.0f, barW * altFrac, barH, {0.3f, 0.5f, 0.9f, 0.9f});
+
+        // State indicator (centered banner)
+        if (lander.state == SimState::Landed) {
+            addBar(sw / 2 - 100, sh / 2 - 20, 200, 40, {0.1f, 0.7f, 0.2f, 0.8f});
+        } else if (lander.state == SimState::Crashed) {
+            addBar(sw / 2 - 100, sh / 2 - 20, 200, 40, {0.8f, 0.1f, 0.1f, 0.8f});
+        }
+
+        return hud;
+    }
 
     // ------------------------------------------------------------------------------------
     // drawFrame function
@@ -1535,8 +1626,37 @@ private:
             vkCmdDraw(cmd, landerVertexCount, 1, 0, 0);
         }
 
-        vkCmdEndRenderPass(cmd);
+        {
+            auto hud = buildHud();
+            if (!hud.vertices.empty()) {
+                uploadBuffer(hudVertexBuffer, hudVertexMemory,
+                    hud.vertices.data(), sizeof(glm::vec2) * hud.vertices.size());
 
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, hudPipeline);
+                VkBuffer buffers[] = {hudVertexBuffer};
+                VkDeviceSize offsets[] = {0};
+                vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
+
+                // Screen-space orthographic: pixel coords → NDC
+                glm::mat4 screenProj = glm::ortho(
+                    0.0f, static_cast<float>(swapchainExtent.width),
+                    static_cast<float>(swapchainExtent.height), 0.0f,
+                    -1.0f, 1.0f
+                );
+
+                // Draw each bar with its own color via push constants
+                for (size_t i = 0; i < hud.bars.size(); i++) {
+                    pc.mvp = screenProj;
+                    pc.color = hud.barColors[i];
+                    vkCmdPushConstants(cmd, pipelineLayout,
+                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                        0, sizeof(pc), &pc);
+                    vkCmdDraw(cmd, hud.bars[i].second, 1, hud.bars[i].first, 0);
+                }
+            }
+        }
+
+        vkCmdEndRenderPass(cmd);
         if (vkEndCommandBuffer(cmd) != VK_SUCCESS)
             throw std::runtime_error("Failed to record command buffer");
     }
