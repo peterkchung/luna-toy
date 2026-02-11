@@ -1,6 +1,6 @@
-# Luna
+# LunaToy
 
-A lunar simulation built with Vulkan to help people build intuition on simulating projects related to the moon.
+A 2D toy simulation built with Vulkan to help people build intuition on simulating projects related to the moon.
 
 ## Dependencies
 

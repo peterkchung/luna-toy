@@ -1,4 +1,4 @@
-// Luna - Lunar Simulation by @peterkchung
+// LunaToy - Lunar Simulation by @peterkchung
 
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
