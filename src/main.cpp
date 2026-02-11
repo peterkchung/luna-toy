@@ -27,6 +27,10 @@ constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 constexpr float WORLD_WIDTH = 40.0f;
 constexpr float WORLD_HEIGHT = 22.5f;
 
+constexpr float GROUND_HEIGHT = 2.0f;
+constexpr float LANDING_PAD_X = 20.0f;
+constexpr float LANDING_PAD_WIDTH = 3.0f;
+
 struct QueueFamilyIndices {
     std::optional<glm::uint32_t> graphicsFamily;
     std::optional<glm::uint32_t> presentFamily;
@@ -49,16 +53,6 @@ struct PushConstants {
     glm::vec4 color;
 };
 
-std::vector<char> readFile(const std::string& filename) {
-    std::ifstream file(filename, std::ios::ate | std::ios::binary);
-    if (!file.is_open()) throw std::runtime_error("Failed to open file: " + filename);
-    size_t fileSize = static_cast<size_t>(file.tellg());
-    std::vector<char> buffer(fileSize);
-    file.seekg(0);
-    file.read(buffer.data(), fileSize);
-    return buffer;
-}
-
 enum class SimState {
     Flying,
     Landed,
@@ -74,6 +68,17 @@ struct Lander {
     SimState state = SimState::Flying;
 };
 
+std::vector<char> readFile(const std::string& filename) {
+    std::ifstream file(filename, std::ios::ate | std::ios::binary);
+    if (!file.is_open()) throw std::runtime_error("Failed to open file: " + filename);
+    size_t fileSize = static_cast<size_t>(file.tellg());
+    std::vector<char> buffer(fileSize);
+    file.seekg(0);
+    file.read(buffer.data(), fileSize);
+    return buffer;
+};
+
+
 // ========================================================================================
 // Application
 // ========================================================================================
@@ -84,6 +89,7 @@ public:
     void run() {
         initWindow();
         initVulkan();
+        initSim();
         mainLoop();
         cleanup();
     }
@@ -132,7 +138,10 @@ private:
     VkBuffer landerVertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory landerVertexMemory = VK_NULL_HANDLE;
     uint32_t landerVertexCount = 0;
-
+    
+    VkBuffer landingPadVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory landingPadVertexMemory = VK_NULL_HANDLE;
+    uint32_t landingPadVertexCount = 0;
     Lander lander;  
 
     // ------------------------------------------------------------------------------------
@@ -167,6 +176,12 @@ private:
         createLanderGeometry();
     }
 
+    void initSim() {
+        createLanderGeometry();
+        createLandingPadGeometry();
+        resetLander();
+    }
+
     void mainLoop() {
         auto lastTime = std::chrono::high_resolution_clock::now();
         
@@ -181,7 +196,8 @@ private:
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
 
-            handleInput(dt);
+            // TODO comment out handleInput and update for physics
+            // handleInput(dt);
             drawFrame();
         }
         // wait for gpu before cleanup
@@ -190,7 +206,8 @@ private:
 
     void cleanup() {
         destroyBuffer(landerVertexBuffer, landerVertexMemory);
-
+        // TODO destroy lander
+         
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
             vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
@@ -480,7 +497,6 @@ private:
 
         VkCommandPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        // RESET_COMMAND_BUFFER_BIT lets us re-record each frame
         poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         poolInfo.queueFamilyIndex = indices.graphicsFamily.value();
 
@@ -489,7 +505,6 @@ private:
     }
 
     void createCommandBuffers() {
-        // One command buffer per frame-in-flight
         commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 
         VkCommandBufferAllocateInfo allocInfo{};
@@ -512,7 +527,6 @@ private:
 
         VkFenceCreateInfo fenceInfo{};
         fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        // Start signaled so the first frame doesn't deadlock waiting
         fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -582,6 +596,45 @@ private:
         uploadBuffer(landerVertexBuffer, landerVertexMemory, verts.data(), bufSize);
     }
 
+    void createLandingPadGeometry() {
+        float padLeft = LANDING_PAD_X - LANDING_PAD_WIDTH / 2.0f;
+        float padRight = LANDING_PAD_X + LANDING_PAD_WIDTH / 2.0f;
+        float padY = GROUND_HEIGHT;
+
+        std::vector<Vertex2D> verts;
+        glm::vec3 padColor{0.2f, 0.8f, 0.2f};
+
+        // Helper: build a rectangle from two triangles
+        auto addQuad = [&](float x0, float y0, float x1, float y1, glm::vec3 c) {
+            verts.push_back({{x0, y0}, c});
+            verts.push_back({{x1, y0}, c});
+            verts.push_back({{x1, y1}, c});
+            verts.push_back({{x0, y0}, c});
+            verts.push_back({{x1, y1}, c});
+            verts.push_back({{x0, y1}, c});
+        };
+
+        // Pad surface (thin horizontal bar)
+        addQuad(padLeft, padY, padRight, padY + 0.1f, padColor);
+
+        // Left marker post
+        addQuad(padLeft - 0.1f, padY, padLeft + 0.1f, padY + 0.8f, padColor);
+
+        // Right marker post
+        addQuad(padRight - 0.1f, padY, padRight + 0.1f, padY + 0.8f, padColor);
+
+        landingPadVertexCount = static_cast<uint32_t>(verts.size());
+        VkDeviceSize bufSize = sizeof(Vertex2D) * verts.size();
+        createBuffer(bufSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     landingPadVertexBuffer, landingPadVertexMemory);
+        uploadBuffer(landingPadVertexBuffer, landingPadVertexMemory, verts.data(), bufSize);
+    }
+
+    void resetLander() {
+        lander = Lander{};
+    }
+
     // TEST FUNCTION
     /*
     void createTriangleBuffer() {
@@ -603,6 +656,7 @@ private:
     }
     */
 
+    /*
     // ------------------------------------------------------------------------------------
     // handleInput function
     // ------------------------------------------------------------------------------------
@@ -627,6 +681,12 @@ private:
             glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
             lander.pos.y -= moveSpeed * dt;
     }
+    */
+    
+    // ------------------------------------------------------------------------------------
+    // updatePhysics function
+    // ------------------------------------------------------------------------------------
+
     
     // ------------------------------------------------------------------------------------
     // drawFrame function
