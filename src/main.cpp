@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <random>
 #include <stdexcept>
 #include <vector>
 
@@ -30,6 +31,7 @@ constexpr float WORLD_HEIGHT = 22.5f;
 constexpr float GROUND_HEIGHT = 2.0f;
 constexpr float LANDING_PAD_X = 20.0f;
 constexpr float LANDING_PAD_WIDTH = 3.0f;
+constexpr int TERRAIN_SEGMENTS = 200;
 
 // Physics Sim Constants
 constexpr float LUNAR_GRAVITY = 1.62f;       // m/s² — Moon's actual surface gravity
@@ -60,6 +62,10 @@ struct Vertex2D {
 struct PushConstants {
     glm::mat4 mvp;
     glm::vec4 color;
+};
+
+struct TerrainVertex {
+    glm::vec2 pos;
 };
 
 enum class SimState {
@@ -128,6 +134,7 @@ private:
     // Pipeline
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline landerPipeline = VK_NULL_HANDLE;    
+    VkPipeline terrainPipeline = VK_NULL_HANDLE;
 
     // Command pool, sync, and buffers
     VkCommandPool commandPool = VK_NULL_HANDLE;
@@ -151,7 +158,15 @@ private:
     VkBuffer landingPadVertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory landingPadVertexMemory = VK_NULL_HANDLE;
     uint32_t landingPadVertexCount = 0;
+
+    VkBuffer terrainVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory terrainVertexMemory = VK_NULL_HANDLE;
+    uint32_t terrainVertexCount = 0;   
+
     Lander lander;  
+    std::vector<glm::vec2> terrainPoints;
+    float landingPadX = 0.0f;
+    std::mt19937 rng{42};
 
     // ------------------------------------------------------------------------------------
     // Main Loop Functions
@@ -186,7 +201,9 @@ private:
     }
 
     void initSim() {
+        generateTerrain();
         createLanderGeometry();
+        createTerrainGeometry();
         createLandingPadGeometry();
         resetLander();
     }
@@ -489,19 +506,36 @@ private:
     void createPipelines() {
         std::string shaderDir = SHADER_DIR;
 
-        VkVertexInputBindingDescription binding{};
-        binding.binding = 0;
-        binding.stride = sizeof(Vertex2D);
-        binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        {
+            VkVertexInputBindingDescription binding{};
+            binding.binding = 0;
+            binding.stride = sizeof(Vertex2D);
+            binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-        std::vector<VkVertexInputAttributeDescription> attrs(2);
-        attrs[0] = {0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex2D, pos)};
-        attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex2D, color)};
+            std::vector<VkVertexInputAttributeDescription> attrs(2);
+            attrs[0] = {0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex2D, pos)};
+            attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex2D, color)};
 
-        landerPipeline = createPipeline(
-            shaderDir + "/shader.vert.spv", shaderDir + "/shader.frag.spv",
-            {binding}, attrs, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
-        );
+            landerPipeline = createPipeline(
+                shaderDir + "/shader.vert.spv", shaderDir + "/shader.frag.spv",
+                {binding}, attrs, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+            );
+        }
+
+        {
+            VkVertexInputBindingDescription binding{};
+            binding.binding = 0;
+            binding.stride = sizeof(TerrainVertex);
+            binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+            std::vector<VkVertexInputAttributeDescription> attrs(1);
+            attrs[0] = {0, 0, VK_FORMAT_R32G32_SFLOAT, 0};
+
+            terrainPipeline = createPipeline(
+                shaderDir + "/terrain.vert.spv", shaderDir + "/terrain.frag.spv",
+                {binding}, attrs, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP
+            );
+        }
     }
 
     void createCommandPool() {
@@ -546,6 +580,60 @@ private:
             vkCreateSemaphore(device, &semInfo, nullptr, &renderFinishedSemaphores[i]);
             vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]);
         }
+    }
+
+     void generateTerrain() {
+        terrainPoints.clear();
+        std::uniform_real_distribution<float> padPosDist(8.0f, WORLD_WIDTH - 8.0f);
+
+        // Randomize landing pad position (away from edges)
+        landingPadX = padPosDist(rng);
+
+        float dx = WORLD_WIDTH / TERRAIN_SEGMENTS;
+
+        for (int i = 0; i <= TERRAIN_SEGMENTS; i++) {
+            float x = i * dx;
+            float height;
+
+            float padLeft = landingPadX - LANDING_PAD_WIDTH / 2.0f;
+            float padRight = landingPadX + LANDING_PAD_WIDTH / 2.0f;
+
+            if (x >= padLeft && x <= padRight) {
+                // Flat landing zone
+                height = 2.0f;
+            } else {
+                // Layered sine waves — each adds detail at a different scale
+                height = 2.0f
+                    + 1.5f * std::sin(x * 0.3f)          // broad hills
+                    + 0.8f * std::sin(x * 0.7f + 1.0f)   // medium bumps
+                    + 0.4f * std::sin(x * 1.5f + 2.0f)   // small ridges
+                    + 0.2f * std::sin(x * 3.0f + 0.5f);  // fine texture
+                height = std::max(height, 0.5f);          // floor to prevent negative
+
+                // Smooth transition near pad edges (quadratic ease)
+                float distToPad = std::min(std::abs(x - padLeft), std::abs(x - padRight));
+                if (distToPad < 2.0f) {
+                    float t = distToPad / 2.0f;
+                    height = glm::mix(2.0f, height, t * t);  // t² = smooth ease-in
+                }
+            }
+            terrainPoints.push_back({x, height});
+        }
+    }
+
+    void createTerrainGeometry() {
+        std::vector<TerrainVertex> verts;
+        for (const auto& pt : terrainPoints) {
+            verts.push_back({{pt.x, pt.y}});   // surface
+            verts.push_back({{pt.x, 0.0f}});   // bottom
+        }
+
+        terrainVertexCount = static_cast<uint32_t>(verts.size());
+        VkDeviceSize bufSize = sizeof(TerrainVertex) * verts.size();
+        createBuffer(bufSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     terrainVertexBuffer, terrainVertexMemory);
+        uploadBuffer(terrainVertexBuffer, terrainVertexMemory, verts.data(), bufSize);
     }
 
     void createLanderGeometry() {
@@ -607,16 +695,15 @@ private:
                      landerVertexBuffer, landerVertexMemory);
         uploadBuffer(landerVertexBuffer, landerVertexMemory, verts.data(), bufSize);
     }
-
+    
     void createLandingPadGeometry() {
-        float padLeft = LANDING_PAD_X - LANDING_PAD_WIDTH / 2.0f;
-        float padRight = LANDING_PAD_X + LANDING_PAD_WIDTH / 2.0f;
-        float padY = GROUND_HEIGHT;
+        float padLeft = landingPadX - LANDING_PAD_WIDTH / 2.0f;
+        float padRight = landingPadX + LANDING_PAD_WIDTH / 2.0f;
+        float padY = 2.0f;  // matches terrain flat zone height
 
         std::vector<Vertex2D> verts;
         glm::vec3 padColor{0.2f, 0.8f, 0.2f};
 
-        // Helper: build a rectangle from two triangles
         auto addQuad = [&](float x0, float y0, float x1, float y1, glm::vec3 c) {
             verts.push_back({{x0, y0}, c});
             verts.push_back({{x1, y0}, c});
@@ -626,13 +713,8 @@ private:
             verts.push_back({{x0, y1}, c});
         };
 
-        // Pad surface (thin horizontal bar)
         addQuad(padLeft, padY, padRight, padY + 0.1f, padColor);
-
-        // Left marker post
         addQuad(padLeft - 0.1f, padY, padLeft + 0.1f, padY + 0.8f, padColor);
-
-        // Right marker post
         addQuad(padRight - 0.1f, padY, padRight + 0.1f, padY + 0.8f, padColor);
 
         landingPadVertexCount = static_cast<uint32_t>(verts.size());
@@ -702,7 +784,6 @@ private:
     void updatePhysics(float dt) {
         if (lander.state != SimState::Flying) return;
 
-        // --- Input ---
         bool thrustInput = glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS ||
                            glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS;
         bool leftInput = glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS ||
@@ -710,53 +791,41 @@ private:
         bool rightInput = glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS ||
                           glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS;
 
-        // --- Rotation ---
         if (leftInput) lander.angle -= ROTATION_SPEED * dt;
         if (rightInput) lander.angle += ROTATION_SPEED * dt;
 
-        // --- Gravity (always active) ---
         lander.vel.y -= LUNAR_GRAVITY * dt;
 
-        // --- Thrust (only when pressing up AND fuel remains) ---
         lander.thrusting = thrustInput && lander.fuel > 0.0f;
         if (lander.thrusting) {
-            // Decompose thrust into x/y components based on facing direction
             float thrustX = -std::sin(lander.angle) * THRUST_POWER;
             float thrustY =  std::cos(lander.angle) * THRUST_POWER;
             lander.vel.x += thrustX * dt;
             lander.vel.y += thrustY * dt;
-
-            // Burn fuel
             lander.fuel -= FUEL_BURN_RATE * dt;
             lander.fuel = std::max(lander.fuel, 0.0f);
         }
 
-        // --- Position update (Euler integration) ---
         lander.pos += lander.vel * dt;
 
-        // --- Horizontal wrapping (world is a cylinder) ---
         if (lander.pos.x < 0) lander.pos.x += WORLD_WIDTH;
         if (lander.pos.x > WORLD_WIDTH) lander.pos.x -= WORLD_WIDTH;
 
-        // --- Ground collision (flat ground at GROUND_HEIGHT for now) ---
-        float landerBottom = lander.pos.y - 0.5f;  // feet offset from center
+        // CHANGED: terrain height instead of constant
+        float terrainH = getTerrainHeight(lander.pos.x);
+        float landerBottom = lander.pos.y - 0.5f;
 
-        if (landerBottom <= GROUND_HEIGHT) {
-            // Snap to ground
-            lander.pos.y = GROUND_HEIGHT + 0.5f;
+        if (landerBottom <= terrainH) {
+            lander.pos.y = terrainH + 0.5f;
 
             float speed = glm::length(lander.vel);
-
-            // Normalize angle to [0, 2π] then measure deviation from upright
             float absAngle = std::abs(std::fmod(lander.angle, glm::two_pi<float>()));
             if (absAngle > glm::pi<float>()) absAngle = glm::two_pi<float>() - absAngle;
 
-            // Check if within landing pad bounds
-            float padLeft = LANDING_PAD_X - LANDING_PAD_WIDTH / 2.0f;
-            float padRight = LANDING_PAD_X + LANDING_PAD_WIDTH / 2.0f;
+            float padLeft = landingPadX - LANDING_PAD_WIDTH / 2.0f;
+            float padRight = landingPadX + LANDING_PAD_WIDTH / 2.0f;
             bool onPad = lander.pos.x >= padLeft && lander.pos.x <= padRight;
 
-            // Evaluate landing
             if (speed < SAFE_LANDING_VEL && absAngle < SAFE_LANDING_ANGLE && onPad) {
                 lander.state = SimState::Landed;
                 lander.vel = {0.0f, 0.0f};
@@ -776,6 +845,16 @@ private:
                 std::cout << "    Press R to retry." << std::endl;
             }
         }
+    }
+
+    float getTerrainHeight(float x) const {
+        if (terrainPoints.empty()) return 0.0f;
+        float dx = WORLD_WIDTH / TERRAIN_SEGMENTS;
+        int idx = static_cast<int>(x / dx);
+        idx = std::clamp(idx, 0, static_cast<int>(terrainPoints.size()) - 2);
+        float t = (x - terrainPoints[idx].x) / dx;
+        t = std::clamp(t, 0.0f, 1.0f);
+        return glm::mix(terrainPoints[idx].y, terrainPoints[idx + 1].y, t);
     }
 
     // ------------------------------------------------------------------------------------
@@ -1184,38 +1263,45 @@ private:
         scissor.extent = swapchainExtent;
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        // Orthographic projection: maps world coordinates to clip space
-        // Shows the entire WORLD_WIDTH x WORLD_HEIGHT area
         float aspect = static_cast<float>(swapchainExtent.width) /
                         static_cast<float>(swapchainExtent.height);
         float halfW = WORLD_WIDTH / 2.0f;
         float halfH = halfW / aspect;
+        glm::mat4 proj = glm::ortho(0.0f, WORLD_WIDTH, halfH * 2.0f, 0.0f, -1.0f, 1.0f);
 
-        glm::mat4 proj = glm::ortho(
-            0.0f, WORLD_WIDTH,    // left, right
-            halfH * 2.0f, 0.0f,  // bottom, top
-            -1.0f, 1.0f          // near, far
-        );
+        PushConstants pc{};
 
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, landerPipeline);
+        // --- 1. Terrain (back layer) ---
+        if (terrainVertexCount > 0) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, terrainPipeline);
+            VkBuffer buffers[] = {terrainVertexBuffer};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
 
-        // --- Draw landing pad (identity model matrix — already in world space) ---
+            pc.mvp = proj;
+            pc.color = glm::vec4(0.45f, 0.42f, 0.4f, 1.0f);  // moon gray base
+            vkCmdPushConstants(cmd, pipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(pc), &pc);
+            vkCmdDraw(cmd, terrainVertexCount, 1, 0, 0);
+        }
+
+        // --- 2. Landing pad (middle layer) ---
         {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, landerPipeline);
             VkBuffer buffers[] = {landingPadVertexBuffer};
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
 
-            PushConstants pc{};
-            pc.mvp = proj;  // no model transform needed
+            pc.mvp = proj;
             pc.color = glm::vec4(1.0f);
             vkCmdPushConstants(cmd, pipelineLayout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 0, sizeof(pc), &pc);
-
             vkCmdDraw(cmd, landingPadVertexCount, 1, 0, 0);
         }
 
-        // --- Draw lander (model matrix = translate + rotate) ---
+        // --- 3. Lander (front layer) ---
         {
             VkBuffer buffers[] = {landerVertexBuffer};
             VkDeviceSize offsets[] = {0};
@@ -1224,10 +1310,8 @@ private:
             glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(lander.pos, 0.0f));
             model = glm::rotate(model, -lander.angle, glm::vec3(0.0f, 0.0f, 1.0f));
 
-            PushConstants pc{};
             pc.mvp = proj * model;
 
-            // Visual feedback: tint red on crash, green on landed
             if (lander.state == SimState::Crashed)
                 pc.color = glm::vec4(1.0f, 0.3f, 0.3f, 1.0f);
             else if (lander.state == SimState::Landed)
@@ -1238,9 +1322,13 @@ private:
             vkCmdPushConstants(cmd, pipelineLayout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 0, sizeof(pc), &pc);
-
             vkCmdDraw(cmd, landerVertexCount, 1, 0, 0);
         }
+
+        vkCmdEndRenderPass(cmd);
+
+        if (vkEndCommandBuffer(cmd) != VK_SUCCESS)
+            throw std::runtime_error("Failed to record command buffer");
     }
 };
 
