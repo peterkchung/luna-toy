@@ -1,6 +1,6 @@
 # LunaToy
 
-A 2D toy simulation built with Vulkan to help people build intuition on simulating projects related to the moon.
+A 2D toy simulation built with Vulkan to experiment with physics related to the moon.
 
 ## Dependencies
 
@@ -24,6 +24,7 @@ Re-run `cmake -B build` after modifying `CMakeLists.txt`. Otherwise, `cmake --bu
 
 ```
 luna/
+├── shaders/
 ├── src/
 │   └── main.cpp
 ├── CMakeLists.txt
