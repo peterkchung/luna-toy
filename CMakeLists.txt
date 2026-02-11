@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(Luna VERSION 1.0 LANGUAGES CXX)
+project(luna-toy VERSION 1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,9 +9,9 @@ find_package(Vulkan REQUIRED)
 find_package(glfw3 3.3 REQUIRED)
 find_package(glm REQUIRED)
 
-add_executable(luna src/main.cpp)
+add_executable(luna-toy src/main.cpp)
 
-target_link_libraries(luna PRIVATE
+target_link_libraries(luna-toy PRIVATE
     Vulkan::Vulkan
     glfw
     glm::glm
@@ -52,6 +52,6 @@ foreach(SHADER ${SHADERS})
 endforeach()
 
 add_custom_target(shaders ALL DEPENDS ${SPIRV_FILES})
-add_dependencies(luna shaders)
+add_dependencies(luna-toy shaders)
 
-target_compile_definitions(luna PRIVATE SHADER_DIR="${SPIRV_DIR}")
+target_compile_definitions(luna-toy PRIVATE SHADER_DIR="${SPIRV_DIR}")
