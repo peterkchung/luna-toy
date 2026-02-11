@@ -215,6 +215,9 @@ private:
     std::vector<Particle> particles;
     float particleAccumulator = 0.0f;
     std::mt19937 rng{42};
+    
+    glm::vec2 cameraPos{0.0f, 0.0f};
+    float cameraZoom = 1.0f;
 
     // ------------------------------------------------------------------------------------
     // Main Loop Functions
@@ -290,6 +293,7 @@ private:
             // handleInput(dt);
             updatePhysics(dt);
             updateParticles(dt);
+            updateCamera(dt);
             drawFrame();
         }
         // wait for gpu before cleanup
@@ -870,6 +874,8 @@ private:
         lander = Lander{};
         particleAccumulator = 0.0f;
         for (auto& p : particles) p.active = false;       
+        cameraPos = lander.pos;
+        cameraZoom = 1.0f;       
     }
 
     // TEST FUNCTION
@@ -1115,6 +1121,34 @@ private:
         }
 
         return hud;
+    }
+
+    // ------------------------------------------------------------------------------------
+    // updateCamera function
+    // ------------------------------------------------------------------------------------
+
+    void updateCamera(float /*dt*/) {
+        float targetZoom = 1.0f;
+        float altitude = lander.pos.y - getTerrainHeight(lander.pos.x);
+        if (altitude < 5.0f)
+            targetZoom = 2.0f;
+        else if (altitude < 10.0f)
+            targetZoom = 1.5f;
+
+        cameraZoom = glm::mix(cameraZoom, targetZoom, 0.02f);
+        cameraPos = glm::mix(cameraPos, lander.pos, 0.05f);
+    }
+
+    glm::mat4 getProjectionMatrix() const {
+        float aspect = static_cast<float>(swapchainExtent.width) /
+                        static_cast<float>(swapchainExtent.height);
+        float halfW = (WORLD_WIDTH / 2.0f) / cameraZoom;
+        float halfH = halfW / aspect;
+        float left   = cameraPos.x - halfW;
+        float right  = cameraPos.x + halfW;
+        float bottom = cameraPos.y - halfH;
+        float top    = cameraPos.y + halfH;
+        return glm::ortho(left, right, top, bottom, -1.0f, 1.0f); // top/bottom swapped for Vulkan Y-down
     }
 
     // ------------------------------------------------------------------------------------
@@ -1523,12 +1557,7 @@ private:
         scissor.extent = swapchainExtent;
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        float aspect = static_cast<float>(swapchainExtent.width) /
-                        static_cast<float>(swapchainExtent.height);
-        float halfW = WORLD_WIDTH / 2.0f;
-        float halfH = halfW / aspect;
-        glm::mat4 proj = glm::ortho(0.0f, WORLD_WIDTH, halfH * 2.0f, 0.0f, -1.0f, 1.0f);
-
+        glm::mat4 proj = getProjectionMatrix();
         PushConstants pc{};
 
         // --- 1. Stars ---
